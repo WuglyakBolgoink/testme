@@ -143,6 +143,16 @@ pipeline {
                 archiveArtifacts artifacts: "platforms/${platform}/build/${OSX_BUILD_CONFIG}-${SDK}/${OUTPUT_FILE_NAME}"
             }
         }
+
+        stage("Publish") {
+            if (platform == 'android') {
+                androidApkUpload googleCredentialsId: 'My Google Play account', apkFilesPattern: '**/*.apk', trackName: 'alpha',
+                        recentChangeList: [
+                                [language: 'en-GB', text: "Please test the changes from Jenkins build ${env.BUILD_NUMBER}."],
+                                [language: 'de-DE', text: "Bitte die Änderungen vom Jenkins Build ${env.BUILD_NUMBER} testen."]
+                        ]
+            }
+        }
     }
 
     post {
