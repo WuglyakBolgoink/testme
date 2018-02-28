@@ -26,16 +26,8 @@ if (BUILD_CONFIG.toLowerCase() == "debug") {
 pipeline {
 
     environment {
-        LOGICAL_BRANCH_NAME = env.BRANCH_NAME
+        LOGICAL_BRANCH_NAME = "${env.BRANCH_NAME}"
         BUILD_TIER = "integ"
-
-        if (env.BRANCH_NAME == 'release/release') {
-            BUILD_TIER = "stage"
-            LOGICAL_BRANCH_NAME = 'staging'
-        } else if (env.BRANCH_NAME == 'master') {
-            BUILD_TIER = "prod"
-        }
-
         SERVICE_ID = "test-me"
         SERVICE_VERSION = "${env.LOGICAL_BRANCH_NAME}.${env.BUILD_NUMBER}"
     }
@@ -64,12 +56,28 @@ pipeline {
         stage('Initialize') {
             steps {
                 script {
-                    echo "BRANCH_NAME: ${BRANCH_NAME}"
-                    echo "LOGICAL_BRANCH_NAME: ${LOGICAL_BRANCH_NAME}"
-                    echo "BUILD_TIER: ${BUILD_TIER}"
-                    echo "SERVICE_ID: ${SERVICE_ID}"
-                    echo "SERVICE_VERSION: ${SERVICE_VERSION}"
+                    if (env.BRANCH_NAME == 'release/release') {
+                        env.BUILD_TIER = "stage"
+                        env.LOGICAL_BRANCH_NAME = 'staging'
+                    } else if (env.BRANCH_NAME == 'master') {
+                        env.BUILD_TIER = "prod"
+                    }
 
+                    echo "PROJECT_NAME: ${PROJECT_NAME}"
+                    echo "BUNDLE_ID: ${BUNDLE_ID}"
+                    echo "VERSION: ${VERSION}"
+                    echo "SHORT_VERSION: ${SHORT_VERSION}"
+                    echo "----"
+                    echo "INFO_PLIST: ${INFO_PLIST}"
+                    echo "OUTPUT_FILE_NAME: ${OUTPUT_FILE_NAME}"
+                    echo "OSX_BUILD_CONFIG: ${OSX_BUILD_CONFIG}"
+                    echo "----"
+                    echo "BRANCH_NAME: ${env.BRANCH_NAME}"
+                    echo "LOGICAL_BRANCH_NAME: ${env.LOGICAL_BRANCH_NAME}"
+                    echo "BUILD_TIER: ${env.BUILD_TIER}"
+                    echo "SERVICE_ID: ${env.SERVICE_ID}"
+                    echo "SERVICE_VERSION: ${env.SERVICE_VERSION}"
+                    echo "----"
 
                     sh "pwd"
                     sh "ls -la"
@@ -82,88 +90,98 @@ pipeline {
         // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- Cordova Prepare
         stage('Cordova Prepare') {
             steps {
-                sh 'npm install --production'
-                sh "cordova platform rm ${PLATFORM}"
-                sh "cordova platform add ${PLATFORM}"
-                sh "cordova prepare ${PLATFORM}"
-                sh 'rm -rf node_modules'
+                script {
+                    sh 'npm install --production'
+                    sh "cordova platform rm ${PLATFORM}"
+                    sh "cordova platform add ${PLATFORM}"
+                    sh "cordova prepare ${PLATFORM}"
+                    sh 'rm -rf node_modules'
+                }
             }
         }
 
         // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- Cordova Build
         stage("Cordova Build") {
-            if (PLATFORM == 'android') {
-                if (BUILD_CONFIG == 'debug') {
-                    sh "cordova build ${PLATFORM} --debug"
+            script {
+                if (PLATFORM == 'android') {
+                    if (BUILD_CONFIG == 'debug') {
+                        sh "cordova build ${PLATFORM} --debug"
+                    } else {
+                        sh "cordova build ${PLATFORM} --release"
+                    }
                 } else {
-                    sh "cordova build ${PLATFORM} --release"
+                    xcodeBuild(
+                            cleanBeforeBuild: CLEAN,
+                            src: "./platforms/${PLATFORM}",
+                            schema: "${PROJECT_NAME}",
+                            workspace: "${PROJECT_NAME}",
+                            buildDir: "build",
+                            sdk: "${SDK}",
+                            version: "${VERSION}",
+                            shortVersion: "${SHORT_VERSION}",
+                            bundleId: "${BUNDLE_ID}",
+                            infoPlistPath: "${INFO_PLIST}",
+                            xcodeBuildArgs: 'ENABLE_BITCODE=NO OTHER_CFLAGS="-fstack-protector -fstack-protector-all"',
+                            autoSign: false,
+                            config: "${OSX_BUILD_CONFIG}"
+                    )
                 }
-            } else {
-                xcodeBuild(
-                        cleanBeforeBuild: CLEAN,
-                        src: "./platforms/${PLATFORM}",
-                        schema: "${PROJECT_NAME}",
-                        workspace: "${PROJECT_NAME}",
-                        buildDir: "build",
-                        sdk: "${SDK}",
-                        version: "${VERSION}",
-                        shortVersion: "${SHORT_VERSION}",
-                        bundleId: "${BUNDLE_ID}",
-                        infoPlistPath: "${INFO_PLIST}",
-                        xcodeBuildArgs: 'ENABLE_BITCODE=NO OTHER_CFLAGS="-fstack-protector -fstack-protector-all"',
-                        autoSign: false,
-                        config: "${OSX_BUILD_CONFIG}"
-                )
             }
         }
 
         // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- Sign
         stage("Sign") {
-            if (PLATFORM == 'android') {
-                if (BUILD_CONFIG == 'release') {
-                    signAndroidApks(
-                            keyStoreId: "${params.BUILD_CREDENTIAL_ID}",
-                            keyAlias: "${params.BUILD_CREDENTIAL_ALIAS}",
-                            apksToSign: "platforms/android/**/*-unsigned.apk",
-                            // uncomment the following line to output the signed APK to a separate directory as described above
-                            // signedApkMapping: [ $class: UnsignedApkBuilderDirMapping ],
-                            // uncomment the following line to output the signed APK as a sibling of the unsigned APK, as described above, or just omit signedApkMapping
-                            // you can override these within the script if necessary
-                            // androidHome: '/usr/local/Cellar/android-sdk'
-                    )
-                } else {
-                    println('Debug Build - Using default developer signing key')
+            script {
+                if (PLATFORM == 'android') {
+                    if (BUILD_CONFIG == 'release') {
+                        signAndroidApks(
+                                keyStoreId: "${params.BUILD_CREDENTIAL_ID}",
+                                keyAlias: "${params.BUILD_CREDENTIAL_ALIAS}",
+                                apksToSign: "platforms/android/**/*-unsigned.apk",
+                                // uncomment the following line to output the signed APK to a separate directory as described above
+                                // signedApkMapping: [ $class: UnsignedApkBuilderDirMapping ],
+                                // uncomment the following line to output the signed APK as a sibling of the unsigned APK, as described above, or just omit signedApkMapping
+                                // you can override these within the script if necessary
+                                // androidHome: '/usr/local/Cellar/android-sdk'
+                        )
+                    } else {
+                        println('Debug Build - Using default developer signing key')
+                    }
                 }
-            }
-            if (PLATFORM == 'ios') {
-                codeSign(
-                        profileId: "${CODE_SIGN_PROFILE_ID}",
-                        clean: CLEAN,
-                        verify: true,
-                        ipaName: OUTPUT_FILE_NAME,
-                        appPath: "platforms/${PLATFORM}/build/${OSX_BUILD_CONFIG}-${SDK}/${PROJECT_NAME}.app"
-                )
+                if (PLATFORM == 'ios') {
+                    codeSign(
+                            profileId: "${CODE_SIGN_PROFILE_ID}",
+                            clean: CLEAN,
+                            verify: true,
+                            ipaName: OUTPUT_FILE_NAME,
+                            appPath: "platforms/${PLATFORM}/build/${OSX_BUILD_CONFIG}-${SDK}/${PROJECT_NAME}.app"
+                    )
+                }
             }
         }
 
         // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- Archive
         stage("Archive") {
-            if (PLATFORM == 'android') {
-                archiveArtifacts artifacts: "platforms/android/build/outputs/apk/android-${BUILD_CONFIG}.apk", excludes: 'platforms/android/build/outputs/apk/*-unaligned.apk'
-            }
-            if (PLATFORM == 'ios') {
-                archiveArtifacts artifacts: "platforms/${PLATFORM}/build/${OSX_BUILD_CONFIG}-${SDK}/${OUTPUT_FILE_NAME}"
+            script {
+                if (PLATFORM == 'android') {
+                    archiveArtifacts artifacts: "platforms/android/build/outputs/apk/android-${BUILD_CONFIG}.apk", excludes: 'platforms/android/build/outputs/apk/*-unaligned.apk'
+                }
+                if (PLATFORM == 'ios') {
+                    archiveArtifacts artifacts: "platforms/${PLATFORM}/build/${OSX_BUILD_CONFIG}-${SDK}/${OUTPUT_FILE_NAME}"
+                }
             }
         }
 
         // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- Publish Android
         stage("Publish Android") {
-            if (PLATFORM == 'android') {
-                androidApkUpload googleCredentialsId: 'My Google Play account', apkFilesPattern: '**/*.apk', trackName: 'alpha',
-                        recentChangeList: [
-                                [language: 'en-GB', text: "Please test the changes from Jenkins build ${env.BUILD_NUMBER}."],
-                                [language: 'de-DE', text: "Bitte die Änderungen vom Jenkins Build ${env.BUILD_NUMBER} testen."]
-                        ]
+            script {
+                if (PLATFORM == 'android') {
+                    androidApkUpload googleCredentialsId: 'My Google Play account', apkFilesPattern: '**/*.apk', trackName: 'alpha',
+                            recentChangeList: [
+                                    [language: 'en-GB', text: "Please test the changes from Jenkins build ${env.BUILD_NUMBER}."],
+                                    [language: 'de-DE', text: "Bitte die Änderungen vom Jenkins Build ${env.BUILD_NUMBER} testen."]
+                            ]
+                }
             }
         }
     }
