@@ -1,13 +1,18 @@
-def platform = params?.PLATFORM?.trim()                      // e.g. "ios" or "android"
-BUILD_CONFIG = params?.BUILD_CONFIG?.trim()                 // e.g. "Debug" or "Release"
+// ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- -- Initialize
+
+PLATFORM = "android" //params?.PLATFORM?.trim()                      // e.g. "ios" or "android"
+BUILD_CONFIG = "Release"//params?.BUILD_CONFIG?.trim()                 // e.g. "Debug" or "Release"
+
+CLEAN = true                          // Do a clean build and sign
 
 PROJECT_NAME = "TestMe"
-CLEAN = true                          // Do a clean build and sign
-INFO_PLIST = "${PROJECT_NAME}/${PROJECT_NAME}-Info.plist"
+BUNDLE_ID = "de.cyberkatze.testme"
 VERSION = "1.0.0"
 SHORT_VERSION = "1.0"
-BUNDLE_ID = "de.cyberkatze.testme"
+
+INFO_PLIST = "${PROJECT_NAME}/${PROJECT_NAME}-Info.plist"
 OUTPUT_FILE_NAME = "${PROJECT_NAME}-${BUILD_CONFIG}.ipa".replace(" ", "").toLowerCase()
+
 SDK = "iphoneos"
 
 if (BUILD_CONFIG.toLowerCase() == "debug") {
@@ -16,8 +21,25 @@ if (BUILD_CONFIG.toLowerCase() == "debug") {
     OSX_BUILD_CONFIG = "Release"
 }
 
+// ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- --
 
 pipeline {
+
+    environment {
+        LOGICAL_BRANCH_NAME = env.BRANCH_NAME
+        BUILD_TIER = "integ"
+
+        if (env.BRANCH_NAME == 'release/release') {
+            BUILD_TIER = "stage"
+            LOGICAL_BRANCH_NAME = 'staging'
+        } else if (env.BRANCH_NAME == 'master') {
+            BUILD_TIER = "prod"
+        }
+
+        SERVICE_ID = "test-me"
+        SERVICE_VERSION = "${env.LOGICAL_BRANCH_NAME}.${env.BUILD_NUMBER}"
+    }
+
     agent any
 
     options {
@@ -26,6 +48,7 @@ pipeline {
 
     stages {
 
+        // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- Check global module
         stage('Check global module') {
             steps {
                 script {
@@ -37,61 +60,48 @@ pipeline {
             }
         }
 
+        // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- Initialize
         stage('Initialize') {
             steps {
                 script {
-                    // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- - Set ENV variables
-                    env.LOGICAL_BRANCH_NAME = env.BRANCH_NAME
-                    env.BUILD_TIER = "integ"
+                    echo "BRANCH_NAME: ${BRANCH_NAME}"
+                    echo "LOGICAL_BRANCH_NAME: ${LOGICAL_BRANCH_NAME}"
+                    echo "BUILD_TIER: ${BUILD_TIER}"
+                    echo "SERVICE_ID: ${SERVICE_ID}"
+                    echo "SERVICE_VERSION: ${SERVICE_VERSION}"
 
-                    if (env.BRANCH_NAME == 'release/release') {
-                        env.BUILD_TIER = "stage"
-                        env.LOGICAL_BRANCH_NAME = 'staging'
-                    } else if (env.BRANCH_NAME == 'master') {
-                        env.BUILD_TIER = "prod"
-                    }
 
-                    env.SERVICE_ID = "test-me"
-                    env.SERVICE_VERSION = "${env.LOGICAL_BRANCH_NAME}.${env.BUILD_NUMBER}"
-
-                    // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- - Outputs
-
-                    echo "BRANCH_NAME: $env.BRANCH_NAME"
-                    echo "LOGICAL_BRANCH_NAME: $env.LOGICAL_BRANCH_NAME"
-                    echo "BUILD_TIER: $env.BUILD_TIER"
-                    echo "SERVICE_ID: $env.SERVICE_ID"
-                    echo "SERVICE_VERSION: $env.SERVICE_VERSION"
-
-                    // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- - GIT
                     sh "pwd"
                     sh "ls -la"
-                    // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- - GIT
-                    sh "git clean -f && git reset --hard origin/$env.BRANCH_NAME"
+
+                    sh "git clean -f && git reset --hard origin/${BRANCH_NAME}"
                 }
             }
         }
 
+        // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- Cordova Prepare
         stage('Cordova Prepare') {
             steps {
                 sh 'npm install --production'
-                sh "cordova platform rm ${platform}"
-                sh "cordova platform add ${platform}"
-                sh "cordova prepare ${platform}"
+                sh "cordova platform rm ${PLATFORM}"
+                sh "cordova platform add ${PLATFORM}"
+                sh "cordova prepare ${PLATFORM}"
                 sh 'rm -rf node_modules'
             }
         }
 
+        // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- Cordova Build
         stage("Cordova Build") {
-            if (platform == 'android') {
+            if (PLATFORM == 'android') {
                 if (BUILD_CONFIG == 'debug') {
-                    sh "cordova build ${platform} --debug"
+                    sh "cordova build ${PLATFORM} --debug"
                 } else {
-                    sh "cordova build ${platform} --release"
+                    sh "cordova build ${PLATFORM} --release"
                 }
             } else {
                 xcodeBuild(
                         cleanBeforeBuild: CLEAN,
-                        src: "./platforms/${platform}",
+                        src: "./platforms/${PLATFORM}",
                         schema: "${PROJECT_NAME}",
                         workspace: "${PROJECT_NAME}",
                         buildDir: "build",
@@ -107,8 +117,9 @@ pipeline {
             }
         }
 
+        // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- Sign
         stage("Sign") {
-            if (platform == 'android') {
+            if (PLATFORM == 'android') {
                 if (BUILD_CONFIG == 'release') {
                     signAndroidApks(
                             keyStoreId: "${params.BUILD_CREDENTIAL_ID}",
@@ -124,28 +135,30 @@ pipeline {
                     println('Debug Build - Using default developer signing key')
                 }
             }
-            if (platform == 'ios') {
+            if (PLATFORM == 'ios') {
                 codeSign(
                         profileId: "${CODE_SIGN_PROFILE_ID}",
                         clean: CLEAN,
                         verify: true,
                         ipaName: OUTPUT_FILE_NAME,
-                        appPath: "platforms/${platform}/build/${OSX_BUILD_CONFIG}-${SDK}/${PROJECT_NAME}.app"
+                        appPath: "platforms/${PLATFORM}/build/${OSX_BUILD_CONFIG}-${SDK}/${PROJECT_NAME}.app"
                 )
             }
         }
 
+        // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- Archive
         stage("Archive") {
-            if (platform == 'android') {
+            if (PLATFORM == 'android') {
                 archiveArtifacts artifacts: "platforms/android/build/outputs/apk/android-${BUILD_CONFIG}.apk", excludes: 'platforms/android/build/outputs/apk/*-unaligned.apk'
             }
-            if (platform == 'ios') {
-                archiveArtifacts artifacts: "platforms/${platform}/build/${OSX_BUILD_CONFIG}-${SDK}/${OUTPUT_FILE_NAME}"
+            if (PLATFORM == 'ios') {
+                archiveArtifacts artifacts: "platforms/${PLATFORM}/build/${OSX_BUILD_CONFIG}-${SDK}/${OUTPUT_FILE_NAME}"
             }
         }
 
-        stage("Publish") {
-            if (platform == 'android') {
+        // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- Publish Android
+        stage("Publish Android") {
+            if (PLATFORM == 'android') {
                 androidApkUpload googleCredentialsId: 'My Google Play account', apkFilesPattern: '**/*.apk', trackName: 'alpha',
                         recentChangeList: [
                                 [language: 'en-GB', text: "Please test the changes from Jenkins build ${env.BUILD_NUMBER}."],
@@ -155,6 +168,7 @@ pipeline {
         }
     }
 
+    // ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- --- Send post messages
     post {
         success {
             emailext(
